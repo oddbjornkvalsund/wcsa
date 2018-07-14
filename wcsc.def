@@ -1,0 +1,3 @@
+LIBRARY         wcsc  
+EXPORTS  
+    DllMain     @1
