@@ -1,17 +1,14 @@
 /*+===================================================================
-  File:      wcsc.c
+  File:    wcsc.c
 
-  Summary:   Brief summary of the file contents and purpose.
+  Summary: Windows Certificate Store Combiner
+           See README.md for a functional description of this program.
 
-  Classes:   Classes declared or used (in source files).
+  Origin:  Initial version authored and published by Oddbjørn Kvalsund
+           on https://github.com/oddbjornkvalsund/wcsc July 2018.
 
-  Functions: Functions exported (in source files).
-
-  Origin:    Indications of where content may have come from. This
-             is not a change history but rather a reference to the
-             editor-inheritance behind the content or other
-             indications about the origin of the source.
-## 
+  TODOs:
+           - Handle CertOpenSystemStoreA vs CertOpenSystemStoreW.
 
   Copyright Oddbjørn Kvalsund <oddbjorn.kvalsund@gmail.com> 2018
 ===================================================================+*/
@@ -25,31 +22,23 @@
 #pragma comment(lib, "Detours")
 #pragma comment(lib, "Crypt32")
 
-// Keep reference to original function
+static HCERTSTORE hCurrentUserStore;
+static HCERTSTORE hLocalMachineStore;
+static HCERTSTORE hCollectionStore;
 
+// Function pointers to original functions for use by Microsoft Detours
 static HCERTSTORE(WINAPI *TrueCertOpenSystemStore)(
     HCRYPTPROV_LEGACY hProv,
     LPCSTR szSubsystemProtocol) = CertOpenSystemStore;
 
-// Helper functions
+static BOOL(WINAPI *TrueCertCloseStore)(
+    HCERTSTORE hCertStore,
+    DWORD dwFlags) = CertCloseStore;
 
-void ErrorExit(LPTSTR lpszFunction)
-{
-    DWORD dwError = GetLastError();
-    LPTSTR lpszErrorBuffer = NULL;
-    FormatMessage(
-        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-        NULL,
-        dwError,
-        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-        (LPTSTR)&lpszErrorBuffer,
-        0,
-        NULL);
-    printf("Error calling %s: %s\n", lpszFunction, lpszErrorBuffer);
-    LocalFree(lpszErrorBuffer);
-    ExitProcess(dwError);
-}
+// Local function declarations
+void ErrorExit(LPTSTR);
 
+// Open an existing certificate store read-only
 HCERTSTORE openExistingStore(DWORD dwFlags)
 {
     HCERTSTORE hStore = CertOpenStore(
@@ -66,6 +55,7 @@ HCERTSTORE openExistingStore(DWORD dwFlags)
     return hStore;
 }
 
+// Create a new certificate collection store and and add existing collections to it
 HCERTSTORE createCollectionStore(HCERTSTORE hStoreA, HCERTSTORE hStoreB)
 {
     HCERTSTORE hCollectionStore = CertOpenStore(CERT_STORE_PROV_COLLECTION, 0, (HCRYPTPROV_LEGACY)NULL, 0, NULL);
@@ -87,17 +77,52 @@ HCERTSTORE createCollectionStore(HCERTSTORE hStoreA, HCERTSTORE hStoreB)
     return hCollectionStore;
 }
 
-// Replacement function
-
-static HCERTSTORE hCurrentUserStore;
-static HCERTSTORE hLocalMachineStore;
-static HCERTSTORE hCollectionStore;
-
+// Detour function for CertOpenSystemStore
 HCERTSTORE WINAPI MyCertOpenSystemStore(HCRYPTPROV_LEGACY hProv, LPCSTR szSubsystemProtocol)
 {
-    return hCollectionStore; // We should probably intercept CertCloseStore() and check for attempts to close hCollectionStore
+    return hCollectionStore; // Always return hCollectionStore 
 }
 
+// Detour function for CertCloseStore
+BOOL WINAPI MyCertCloseStore(HCERTSTORE hCertStore, DWORD dwFlags)
+{
+    if (hCertStore == hCollectionStore)
+    {
+        return TRUE; // Do nothing, fake success
+    }
+
+    return TrueCertCloseStore(hCertStore, dwFlags);
+}
+
+// Close all certificate store handles held by this program
+void closeAllCertificateStores()
+{
+    TrueCertCloseStore(hCollectionStore, 0);
+    TrueCertCloseStore(hLocalMachineStore, 0);
+    TrueCertCloseStore(hCurrentUserStore, 0);
+}
+
+// Print last error to stderr and exit with the corresponding error code
+void ErrorExit(LPTSTR lpszFunction)
+{
+    DWORD dwError = GetLastError();
+    LPTSTR lpszErrorBuffer = NULL;
+    FormatMessage(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        NULL,
+        dwError,
+        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        (LPTSTR)&lpszErrorBuffer,
+        0,
+        NULL);
+    fprintf(stderr, "Error calling %s: %s\n", lpszFunction, lpszErrorBuffer);
+    closeAllCertificateStores();
+    LocalFree(lpszErrorBuffer);
+    ExitProcess(dwError);
+}
+
+// The main dll function exported with ordinal 1 (as defined in wcsc.def)
+// making it suitable for use with the Microsoft Detours 'withdll' utility
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
 {
     if (DetourIsHelperProcess())
@@ -116,8 +141,8 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
         hCollectionStore = createCollectionStore(hCurrentUserStore, hLocalMachineStore);
 
         DetourAttach((VOID *)&TrueCertOpenSystemStore, MyCertOpenSystemStore);
-        LONG error = DetourTransactionCommit();
-        if (error != NO_ERROR)
+        DetourAttach((VOID *)&TrueCertCloseStore, MyCertCloseStore);
+        if (DetourTransactionCommit() != NO_ERROR)
         {
             ErrorExit("DetourTransactionCommit on attach");
         }
@@ -127,14 +152,12 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
         DetourTransactionBegin();
         DetourUpdateThread(GetCurrentThread());
         DetourDetach((VOID *)&TrueCertOpenSystemStore, MyCertOpenSystemStore);
-        LONG error = DetourTransactionCommit();
-        if (error != NO_ERROR)
+        DetourDetach((VOID *)&TrueCertCloseStore, MyCertCloseStore);
+        if (DetourTransactionCommit() != NO_ERROR)
         {
             ErrorExit("DetourTransactionCommit on detach");
         }
-        CertCloseStore(hCollectionStore, 0);
-        CertCloseStore(hLocalMachineStore, 0);
-        CertCloseStore(hCurrentUserStore, 0);
+        closeAllCertificateStores();
     }
 
     return TRUE;
