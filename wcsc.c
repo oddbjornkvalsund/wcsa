@@ -8,6 +8,7 @@
            on https://github.com/oddbjornkvalsund/wcsc July 2018.
 
   TODOs:
+           - Rename to "Windows Certificate Store Aggregator"
            - Handle CertOpenSystemStoreA vs CertOpenSystemStoreW.
 
   Copyright Oddbjørn Kvalsund <oddbjorn.kvalsund@gmail.com> 2018
@@ -38,7 +39,7 @@ static BOOL(WINAPI *TrueCertCloseStore)(
 // Local function declarations
 void ErrorExit(LPTSTR);
 
-// Open an existing certificate store read-only
+// Open an existing certificate store read-only (required to open "Local Computer" as non-administrator)
 HCERTSTORE openExistingStore(DWORD dwFlags)
 {
     HCERTSTORE hStore = CertOpenStore(
