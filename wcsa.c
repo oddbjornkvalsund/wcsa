@@ -1,14 +1,11 @@
 /*+===================================================================
-  File:    wcsc.c
+  File:    wcsa.c
 
-  Summary: Windows Certificate Store Combiner
+  Summary: Windows Certificate Store Aggregator
            See README.md for a functional description of this program.
 
   Origin:  Initial version authored and published by Oddbjørn Kvalsund
-           on https://github.com/oddbjornkvalsund/wcsc July 2018.
-
-  TODOs:
-           - Rename to "Windows Certificate Store Aggregator"
+           on https://github.com/oddbjornkvalsund/wcsa August 2018.
 
   Copyright Oddbjørn Kvalsund <oddbjorn.kvalsund@gmail.com> 2018
 ===================================================================+*/
@@ -223,7 +220,7 @@ void ErrorExit(LPCWSTR lpszFunction)
     ExitProcess(dwError);
 }
 
-// The main dll function exported with ordinal 1 (as defined in wcsc.def)
+// The main dll function exported with ordinal 1 (as defined in wcsa.def)
 // making it suitable for use with the Microsoft Detours 'withdll' utility
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
 {

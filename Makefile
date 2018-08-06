@@ -1,4 +1,4 @@
-all: wcsc.c
+all: wcsa.c
 	set CL=/nologo /I..\Detours\include
 	set LIB=%LIB%;..\Detours\lib.X64
-	cl /DEF wcsc.def /LD wcsc.c
+	cl /DEF wcsa.def /LD wcsa.c
