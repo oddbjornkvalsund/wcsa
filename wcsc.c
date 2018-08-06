@@ -192,10 +192,12 @@ void closeAllCertificateStores()
         TrueCertCloseStore(aCertStores[i].hCollectionStore, 0);
         TrueCertCloseStore(aCertStores[i].hLocalMachineStore, 0);
         TrueCertCloseStore(aCertStores[i].hCurrentUserStore, 0);
-        if(aCertStores[i].aName != NULL) {
+        if (aCertStores[i].aName != NULL)
+        {
             free((void *)aCertStores[i].aName);
         }
-        if(aCertStores[i].wName != NULL) {
+        if (aCertStores[i].wName != NULL)
+        {
             free((void *)aCertStores[i].wName);
         }
     }
