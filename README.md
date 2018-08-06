@@ -1,7 +1,9 @@
 # Windows Certificate Store Aggregator
 ## Problem
 The `SunMSCAPI` JCA provider¹ used by both Oracle JDK/JRE and OpenJDK only provides access to certificates and private keys stored in the `Current User` certificate store. The reason for this is that it uses the `CertOpenSystemStore` WinCrypt API call that explicitly states²:
+
 > Only current user certificates are accessible using this method, not the local machine store.
+
 So if you need access to certificates and/or private keys stored in the Windows `Local Computer` certificate store from a Java program, you are out of luck.
 
 ## Solution
