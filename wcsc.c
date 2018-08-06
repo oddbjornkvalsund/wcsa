@@ -9,7 +9,7 @@
 
   TODOs:
            - Rename to "Windows Certificate Store Aggregator"
-           - Handle CertOpenSystemStoreA vs CertOpenSystemStoreW.
+           - Handle Unicode properly; CertOpenSystemStoreA vs CertOpenSystemStoreW.
 
   Copyright Oddbjørn Kvalsund <oddbjorn.kvalsund@gmail.com> 2018
 ===================================================================+*/
@@ -23,9 +23,18 @@
 #pragma comment(lib, "Detours")
 #pragma comment(lib, "Crypt32")
 
-static HCERTSTORE hCurrentUserStore;
-static HCERTSTORE hLocalMachineStore;
-static HCERTSTORE hCollectionStore;
+#define MAX_NUM_CERT_STORES 32
+
+typedef struct
+{
+    LPTSTR lpszName;
+    HCERTSTORE hCurrentUserStore;
+    HCERTSTORE hLocalMachineStore;
+    HCERTSTORE hCollectionStore;
+} NAMEDHCERTSTORE;
+
+static int numCertStores = 0;
+static NAMEDHCERTSTORE aCertStores[MAX_NUM_CERT_STORES];
 
 // Function pointers to original functions for use by Microsoft Detours
 static HCERTSTORE(WINAPI *TrueCertOpenSystemStore)(
@@ -38,23 +47,6 @@ static BOOL(WINAPI *TrueCertCloseStore)(
 
 // Local function declarations
 void ErrorExit(LPTSTR);
-
-// Open an existing certificate store read-only (required to open "Local Computer" as non-administrator)
-HCERTSTORE openExistingStore(DWORD dwFlags)
-{
-    HCERTSTORE hStore = CertOpenStore(
-        CERT_STORE_PROV_SYSTEM,
-        0,
-        (HCRYPTPROV_LEGACY)NULL,
-        dwFlags | CERT_STORE_READONLY_FLAG,
-        L"MY");
-    if (!hStore)
-    {
-        ErrorExit("CertOpenStore in openExistingStore");
-    }
-
-    return hStore;
-}
 
 // Create a new certificate collection store and and add existing collections to it
 HCERTSTORE createCollectionStore(HCERTSTORE hStoreA, HCERTSTORE hStoreB)
@@ -81,15 +73,62 @@ HCERTSTORE createCollectionStore(HCERTSTORE hStoreA, HCERTSTORE hStoreB)
 // Detour function for CertOpenSystemStore
 HCERTSTORE WINAPI MyCertOpenSystemStore(HCRYPTPROV_LEGACY hProv, LPCSTR szSubsystemProtocol)
 {
-    return hCollectionStore; // Always return hCollectionStore 
+    // Check if the specified store has already been opened
+    for (int i = 0; i < numCertStores; i++)
+    {
+        if (_stricmp(aCertStores[i].lpszName, szSubsystemProtocol) == 0)
+        {
+            return aCertStores[i].hCollectionStore;
+        }
+    }
+
+    // The cache array aCertStores is of a static size, so make sure we don't write past the end of it
+    if (numCertStores == MAX_NUM_CERT_STORES)
+    {
+        ErrorExit("Max number of certificate stores opened!");
+    }
+
+    // Convert szSubsystemProtocol (LPCSTR) to multi-byte (LPWSTR) for use with CertOpenStore
+    wchar_t wszSubsystemProtocol[64];
+    MultiByteToWideChar(CP_ACP, 0, szSubsystemProtocol, -1, (LPWSTR)wszSubsystemProtocol, 64);
+
+    // Initialize new store
+    NAMEDHCERTSTORE *certStore = &(aCertStores[numCertStores++]);
+    certStore->lpszName = strdup(szSubsystemProtocol);
+    certStore->hCurrentUserStore = CertOpenStore(
+        CERT_STORE_PROV_SYSTEM,
+        0,
+        (HCRYPTPROV_LEGACY)NULL,
+        CERT_SYSTEM_STORE_CURRENT_USER | CERT_STORE_READONLY_FLAG,
+        wszSubsystemProtocol);
+    if (!certStore->hCurrentUserStore)
+    {
+        ErrorExit("CertOpenStore for CERT_SYSTEM_STORE_CURRENT_USER in MyCertOpenSystemStore");
+    }
+    certStore->hLocalMachineStore = CertOpenStore(
+        CERT_STORE_PROV_SYSTEM,
+        0,
+        (HCRYPTPROV_LEGACY)NULL,
+        CERT_SYSTEM_STORE_LOCAL_MACHINE | CERT_STORE_READONLY_FLAG,
+        wszSubsystemProtocol);
+    if (!certStore->hLocalMachineStore)
+    {
+        ErrorExit("CertOpenStore for CERT_SYSTEM_STORE_LOCAL_MACHINE in MyCertOpenSystemStore");
+    }
+    certStore->hCollectionStore = createCollectionStore(certStore->hCurrentUserStore, certStore->hLocalMachineStore);
+
+    return certStore->hCollectionStore;
 }
 
 // Detour function for CertCloseStore
 BOOL WINAPI MyCertCloseStore(HCERTSTORE hCertStore, DWORD dwFlags)
 {
-    if (hCertStore == hCollectionStore)
+    for (int i = 0; i < numCertStores; i++)
     {
-        return TRUE; // Do nothing, fake success
+        if (hCertStore == aCertStores[i].hCollectionStore)
+        {
+            return TRUE; // Do nothing, fake success
+        }
     }
 
     return TrueCertCloseStore(hCertStore, dwFlags);
@@ -98,9 +137,13 @@ BOOL WINAPI MyCertCloseStore(HCERTSTORE hCertStore, DWORD dwFlags)
 // Close all certificate store handles held by this program
 void closeAllCertificateStores()
 {
-    TrueCertCloseStore(hCollectionStore, 0);
-    TrueCertCloseStore(hLocalMachineStore, 0);
-    TrueCertCloseStore(hCurrentUserStore, 0);
+    for (int i = 0; i < numCertStores; i++)
+    {
+        TrueCertCloseStore(aCertStores[i].hCollectionStore, 0);
+        TrueCertCloseStore(aCertStores[i].hLocalMachineStore, 0);
+        TrueCertCloseStore(aCertStores[i].hCurrentUserStore, 0);
+    }
+    numCertStores = 0;
 }
 
 // Print last error to stderr and exit with the corresponding error code
@@ -136,11 +179,6 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
         DetourRestoreAfterWith();
         DetourTransactionBegin();
         DetourUpdateThread(GetCurrentThread());
-
-        hCurrentUserStore = openExistingStore(CERT_SYSTEM_STORE_CURRENT_USER);
-        hLocalMachineStore = openExistingStore(CERT_SYSTEM_STORE_LOCAL_MACHINE);
-        hCollectionStore = createCollectionStore(hCurrentUserStore, hLocalMachineStore);
-
         DetourAttach((VOID *)&TrueCertOpenSystemStore, MyCertOpenSystemStore);
         DetourAttach((VOID *)&TrueCertCloseStore, MyCertCloseStore);
         if (DetourTransactionCommit() != NO_ERROR)
