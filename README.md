@@ -15,6 +15,8 @@ Clone this repo and build with `nmake` (requires a working Win32 build environme
 ## Usage
 Instead of starting your application with `java -jar myapp.jar`, you bootstrap it with the Windows Detours³ `withdll` utility: `withdll.exe /d:wcsa.dll java -jar myapp.jar`
 
+Note that you might need to explicitly grant certificate key read permissions to the Windows user that runs the process.
+
 # Limitations
 * The returned collection certificate store is read-only, so adding, updating or removing certificates/private keys will fail.
 * This software intercepts *all* calls to `CertOpenSystemStore`, so make sure this is what you really want before proceeding to use this in production.
