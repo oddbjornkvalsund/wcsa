@@ -11,7 +11,7 @@ This software uses the Microsoft Detours³ library to intercept `CertOpenSystemS
 In addition, it intercepts calls to `CryptAcquireContext` and adds `CRYPT_MACHINE_KEYSET` to `dwFlags` if the original call fails with an `NTE_BAD_KEYSET` ("Keyset does not exist") error. This is required to use keys that are stored in the `Local Computer` certificate store.
 
 ## Get
-Download prebuild binaries [in the release section of this repo](/releases/) or clone this repo and build with `nmake` (requires a working Win32 build environment).
+Download prebuild binaries [in the release section of this repo](https://github.com/oddbjornkvalsund/wcsa/releases) or clone this repo and build with `nmake` (requires a working Win32 build environment).
 
 ## Usage
 Instead of starting your application with `java -jar myapp.jar`, you bootstrap it with the Windows Detours³ `withdll` utility: `withdll.exe /d:wcsa.dll java -jar myapp.jar`
