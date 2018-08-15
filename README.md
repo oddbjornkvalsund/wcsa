@@ -8,6 +8,7 @@ So if you need access to certificates and/or private keys stored in the Windows 
 
 ## Solution
 This software uses the Microsoft Detours³ library to intercept `CertOpenSystemStore` function calls and instead returns a handle to a collection type certificate store that aggregates both the `Current User` and `Local Computer` certificate stores.
+In addition, it intercepts calls to `CryptAcquireContext` and adds `CRYPT_MACHINE_KEYSET` to `dwFlags` if the original call fails with an `NTE_BAD_KEYSET` ("Keyset does not exist") error. This is required to use keys that are stored in the `Local Computer` certificate store.
 
 ## Get
 Clone this repo and build with `nmake` (requires a working Win32 build environment) or download prebuilt binaries from the "Releases" section of this repo.
