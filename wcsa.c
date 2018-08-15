@@ -21,6 +21,7 @@
 
 #pragma comment(lib, "Detours")
 #pragma comment(lib, "Crypt32")
+#pragma comment(lib, "Advapi32")
 
 typedef struct
 {
@@ -42,6 +43,20 @@ static HCERTSTORE(WINAPI *TrueCertOpenSystemStoreA)(
 static HCERTSTORE(WINAPI *TrueCertOpenSystemStoreW)(
     HCRYPTPROV_LEGACY hProv,
     LPCWSTR szSubsystemProtocol) = CertOpenSystemStoreW;
+
+static BOOL(WINAPI *TrueCryptAcquireContextA)(
+    HCRYPTPROV *phProv,
+    LPCSTR szContainer,
+    LPCSTR szProvider,
+    DWORD dwProvType,
+    DWORD dwFlags) = CryptAcquireContextA;
+
+static BOOL(WINAPI *TrueCryptAcquireContextW)(
+    HCRYPTPROV *phProv,
+    LPCWSTR szContainer,
+    LPCWSTR szProvider,
+    DWORD dwProvType,
+    DWORD dwFlags) = CryptAcquireContextW;
 
 static BOOL(WINAPI *TrueCertCloseStore)(
     HCERTSTORE hCertStore,
@@ -167,6 +182,52 @@ HCERTSTORE WINAPI MyCertOpenSystemStoreW(HCRYPTPROV_LEGACY hProv, LPCWSTR szSubs
     return certStore->hCollectionStore;
 }
 
+// Detour function for CryptAcquireContextA
+BOOL WINAPI MyCryptAcquireContextA(HCRYPTPROV *phProv, LPCSTR szContainer, LPCSTR szProvider, DWORD dwProvType, DWORD dwFlags)
+{
+    // CMK = CRYPT_MACHINE_KEYSET flag
+    BOOL successWithoutCMK = TrueCryptAcquireContextA(phProv, szContainer, szProvider, dwProvType, dwFlags);
+    if (successWithoutCMK)
+    {
+        return TRUE;
+    }
+
+    // If the unaltered call to TrueCryptAcquireContext fails with NTE_BAD_KEYSET ("Keyset does not exist")
+    // try to add CRYPT_MACHINE_KEYSET to dwFlags. This is needed to successfully use keys in the LocalMachine certificate store
+    // See: https://docs.microsoft.com/en-us/windows/desktop/api/wincrypt/nf-wincrypt-cryptacquirecontexta#parameters
+    if (GetLastError() == NTE_BAD_KEYSET)
+    {
+        BOOL successWithCMK = TrueCryptAcquireContextA(phProv, szContainer, szProvider, dwProvType, dwFlags | CRYPT_MACHINE_KEYSET);
+        if (successWithCMK)
+        {
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+// Detour function for CryptAcquireContextW, see documentation in MyCryptAcquireContextA
+BOOL WINAPI MyCryptAcquireContextW(HCRYPTPROV *phProv, LPCWSTR szContainer, LPCWSTR szProvider, DWORD dwProvType, DWORD dwFlags)
+{
+    BOOL successWithoutCMK = TrueCryptAcquireContextW(phProv, szContainer, szProvider, dwProvType, dwFlags);
+    if (successWithoutCMK)
+    {
+        return TRUE;
+    }
+
+    if (GetLastError() == NTE_BAD_KEYSET)
+    {
+        BOOL successWithCMK = TrueCryptAcquireContextW(phProv, szContainer, szProvider, dwProvType, dwFlags | CRYPT_MACHINE_KEYSET);
+        if (successWithCMK)
+        {
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
 // Detour function for CertCloseStore
 BOOL WINAPI MyCertCloseStore(HCERTSTORE hCertStore, DWORD dwFlags)
 {
@@ -236,6 +297,8 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
         DetourUpdateThread(GetCurrentThread());
         DetourAttach((VOID *)&TrueCertOpenSystemStoreA, MyCertOpenSystemStoreA);
         DetourAttach((VOID *)&TrueCertOpenSystemStoreW, MyCertOpenSystemStoreW);
+        DetourAttach((VOID *)&TrueCryptAcquireContextA, MyCryptAcquireContextA);
+        DetourAttach((VOID *)&TrueCryptAcquireContextW, MyCryptAcquireContextW);
         DetourAttach((VOID *)&TrueCertCloseStore, MyCertCloseStore);
         if (DetourTransactionCommit() != NO_ERROR)
         {
@@ -249,6 +312,8 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
         DetourDetach((VOID *)&TrueCertOpenSystemStoreA, MyCertOpenSystemStoreA);
         DetourDetach((VOID *)&TrueCertOpenSystemStoreW, MyCertOpenSystemStoreW);
         DetourDetach((VOID *)&TrueCertCloseStore, MyCertCloseStore);
+        DetourDetach((VOID *)&TrueCryptAcquireContextA, MyCryptAcquireContextA);
+        DetourDetach((VOID *)&TrueCryptAcquireContextW, MyCryptAcquireContextW);
         if (DetourTransactionCommit() != NO_ERROR)
         {
             ErrorExit(L"DetourTransactionCommit on detach");
